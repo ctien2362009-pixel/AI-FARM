@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>AI SMART FARM - DASHBOARD V3</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <style>
+        :root { --neon: #ffffff; --bg: #0a0f1d; --card: #161b33; --text: #e0e6ed; }
+        body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; margin: 0; padding: 20px; }
+        .dashboard { display: grid; grid-template-columns: 1fr 380px; gap: 20px; max-width: 1300px; margin: 0 auto; }
+        
+        /* Màn hình quan sát chính */
+        .viewport { background: var(--card); border-radius: 20px; padding: 20px; border: 1px solid #2d3656; box-shadow: 0 0 20px rgba(0,242,255,0.1); }
+        canvas { background: #050811; border-radius: 12px; width: 100%; cursor: crosshair; border: 1px solid #1f2937; }
+
+        /* Bảng điều khiển */
+        .sidebar { background: #f8fafc; color: #1e293b; border-radius: 20px; padding: 25px; display: flex; flex-direction: column; gap: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+        h2 { margin: 0; color: #0f172a; font-size: 1.2rem; display: flex; align-items: center; gap: 10px; }
+        
+        /* Camera AI box */
+        #cam-box { width: 100%; height: 220px; background: #000; border-radius: 12px; border: 2px solid var(--neon); overflow: hidden; position: relative; }
+        .ai-label { padding: 10px; border-radius: 8px; font-weight: bold; text-align: center; font-size: 14px; background: #10b981; color: white; }
+
+        /* Controls */
+        .control-group { background: #fff; padding: 10px; border-radius: 10px; border: 1px solid #e2e8f0; }
+        label { font-size: 13px; font-weight: 600; color: #64748b; display: flex; justify-content: space-between; }
+        input[type=range] { width: 100%; margin-top: 8px; accent-color: #0ea5e9; }
+        
+        .btn { background: #0ea5e9; color: white; border: none; padding: 12px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        .btn:hover { background: #0284c7; transform: translateY(-2px); }
+        
+        .alert-ui { color: #ef4444; font-size: 12px; font-weight: bold; min-height: 15px; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div class="dashboard">
+    <div class="viewport">
+        <h1 style="color: var(--neon); font-size: 1.5rem; margin-top: 0;">🛰️ TRẠM QUAN SÁT TRANG TRẠI AI TRỰC TUYẾN</h1>
+        <canvas id="farmCanvas" width="800" height="600"></canvas>
+        <div style="display: flex; gap: 30px; margin-top: 15px; font-family: monospace; color: var(--neon);">
+            <span>[ NHIỆT ĐỘ: <b id="ui-temp">25</b>°C ]</span>
+            <span>[ ÁNH SÁNG: <b id="ui-light">20</b>% ]</span>
+            <span>[ ROBOT: <b id="ui-robot">ĐANG TUẦN TRA</b> ]</span>
+        </div>
+    </div>
+
+    <div class="sidebar">
+        <h2>🔍 PHÂN TÍCH CAMERA AI</h2>
+        <div id="cam-box"></div>
+        <div id="ai-status" class="ai-label">Đang khởi tạo AI...</div>
+
+        <h2>🛠️ THIẾT LẬP HỆ THỐNG</h2>
+        <div class="control-group">
+            <label>🌡️ NHIỆT ĐỘ MÔI TRƯỜNG <span><b id="vT">25</b>°C</span></label>
+            <input type="range" id="iT" min="15" max="45" value="25">
+        </div>
+
+        <div class="control-group">
+            <label>☀️ CƯỜNG ĐỘ ÁNH SÁNG <span><b id="vL">20</b>%</span></label>
+            <input type="range" id="iL" min="0" max="100" value="20">
+        </div>
+
+        <div class="control-group">
+            <label>⚖️ TRỌNG LƯỢNG GÀ <span><b id="vW">1.5</b>kg</span></label>
+            <input type="range" id="iW" min="0.5" max="3.5" step="0.1" value="1.5">
+        </div>
+
+        <button class="btn" onclick="triggerRFID()">💳 QUÉT RFID & CẤP THỨC ĂN</button>
+        <div id="msg" class="alert-ui"></div>
+    </div>
+</div>
+
+<script>
+    // --- KHỞI TẠO CAMERA AI ---
+    // Thanh nhớ thay link TM của mình vào đây nhé!
+    const TM_URL = "https://teachablemachine.withgoogle.com/models/rLe-7tDAm/"; 
+    let model, webcam, labelBox;
+
+    async function initAI() {
+        try {
+            const mURL = TM_URL + "model.json";
+            const dURL = TM_URL + "metadata.json";
+            model = await tmImage.load(mURL, dURL);
+            
+            webcam = new tmImage.Webcam(380, 220, true); 
+            await webcam.setup(); 
+            await webcam.play();
+            
+            document.getElementById("cam-box").appendChild(webcam.canvas);
+            labelBox = document.getElementById("ai-status");
+            window.requestAnimationFrame(predictLoop);
+        } catch (e) {
+            document.getElementById("ai-status").innerHTML = "⚠️ LỖI: Hãy dùng Cốc Cốc & Cho phép Cam";
+            document.getElementById("ai-status").style.background = "#64748b";
+        }
+    }
+
+    async function predictLoop() {
+        webcam.update();
+        const pred = await model.predict(webcam.canvas);
+        let high = 0; let name = "";
+        for (let i=0; i<model.getTotalClasses(); i++) {
+            if(pred[i].probability > high) { high = pred[i].probability; name = pred[i].className; }
+        }
+        labelBox.innerHTML = `👨‍⚕️ KẾT QUẢ: ${name} (${(high*100).toFixed(0)}%)`;
+        labelBox.style.background = (name.includes("Bệnh") || name.includes("ủ rũ")) ? "#ef4444" : "#10b981";
+        window.requestAnimationFrame(predictLoop);
+    }
+
+    // --- ĐỒ HỌA TRỰC QUAN (CANVAS) ---
+    const cvs = document.getElementById('farmCanvas');
+    const ctx = cvs.getContext('2d');
+    let fanA = 0; let eggX = 0; let robX = 450; let robD = 1;
+
+    function draw() {
+        const T = document.getElementById('iT').value;
+        const L = document.getElementById('iL').value;
+        const W = document.getElementById('iW').value;
+
+        // Sync UI
+        document.getElementById('vT').innerText = document.getElementById('ui-temp').innerText = T;
+        document.getElementById('vL').innerText = document.getElementById('ui-light').innerText = L;
+        document.getElementById('vW').innerText = W;
+
+        ctx.clearRect(0,0,800,600);
+
+        // 1. Khu Gà Con (Mô phỏng kính thông minh đổi màu)
+        ctx.fillStyle = "#1e293b"; ctx.fillRect(40,40,340,260); // Nền
+        let glassA = L/100;
+        ctx.fillStyle = `rgba(0, 242, 255, ${glassA*0.3})`; 
+        ctx.fillRect(50,50,320,240); // Kính
+        ctx.fillStyle = "#00f2ff"; ctx.fillText("🐥 KHU GÀ CON (KÍNH SMART)", 60, 75);
+
+        // 2. Khu Gà Đẻ (Quạt tản nhiệt)
+        ctx.fillStyle = "#1e293b"; ctx.fillRect(420,40,340,260);
+        ctx.strokeStyle = T > 32 ? "#ef4444" : "#00f2ff";
+        ctx.strokeRect(430,50,320,240);
+        ctx.fillStyle = "#fff"; ctx.fillText("🥚 KHU GÀ ĐẺ (QUẠT AI)", 440, 75);
+        
+        // Vẽ Quạt
+        drawFan(600, 170, T > 32);
+
+        // 3. Khu Sản Xuất (Băng chuyền)
+        ctx.fillStyle = "#1e293b"; ctx.fillRect(40,330,720,230);
+        ctx.fillStyle = "#fff"; ctx.fillText("📦 DÂY CHUYỀN SẢN XUẤT TRỨNG TỰ ĐỘNG", 60, 360);
+        drawBelt(70, 480);
+
+        // 4. Robot Đi Tuần (AI Inspector)
+        drawRobot();
+
+        requestAnimationFrame(draw);
+    }
+
+    function drawFan(x, y, on) {
+        ctx.save(); ctx.translate(x,y);
+        if(on) fanA += 0.4;
+        ctx.rotate(fanA);
+        ctx.fillStyle = "#00f2ff";
+        for(let i=0; i<4; i++) { ctx.rotate(Math.PI/2); ctx.fillRect(-3,-35,6,35); }
+        ctx.restore();
+        ctx.beginPath(); ctx.arc(x,y,5,0,7); ctx.fill();
+    }
+
+    function drawBelt(x, y) {
+        ctx.fillStyle = "#050811"; ctx.fillRect(x, y, 660, 25);
+        eggX += 2.5; if(eggX > 110) eggX = 0;
+        for(let i=0; i<7; i++) {
+            let cur = x + ((eggX + i*110) % 660);
+            ctx.fillStyle = "#f8fafc";
+            ctx.beginPath(); ctx.ellipse(cur, y-5, 12, 16, 0, 0, 7); ctx.fill();
+        }
+    }
+
+    function drawRobot() {
+        robX += robD * 1.2;
+        if(robX > 700 || robX < 450) robD *= -1;
+        ctx.fillStyle = "#f59e0b"; ctx.fillRect(robX, 240, 40, 25); // Thân
+        ctx.fillStyle = "#ef4444"; ctx.fillRect(robX + (robD>0?30:5), 245, 6, 6); // Đèn quét
+        ctx.font = "9px Arial"; ctx.fillStyle = "#fff"; ctx.fillText("AI-BOT", robX+5, 255);
+    }
+
+    function triggerRFID() {
+        const w = document.getElementById('iW').value;
+        const m = document.getElementById('msg');
+        if(w < 1.8) m.innerHTML = "⚠️ CẢNH BÁO: Gà thiếu cân! Đã cấp thêm dinh dưỡng.";
+        else m.innerHTML = "✅ RFID: Gà khỏe mạnh. Đã cấp thức ăn tiêu chuẩn.";
+        setTimeout(()=> m.innerHTML = "", 4000);
+    }
+
+    initAI();
+    draw();
+</script>
+</body>
+</html>
